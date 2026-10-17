@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""
+WordSwift — CLI tool (MeiliSearch-like word search engine)
+
+Usage:
+    wordswift train <corpus> -o <model>            Train word embeddings
+    wordswift nearest <model> <word> -n 10         Find nearest neighbors
+    wordswift analogies <model> <a> <b> <c> -n 10  Solve analogies
+    wordswift vector <model> <word>                Get word vector
+    wordswift serve --data-dir <dir>               Start API server
+    wordswift create-index <name>                  Create a new index
+    wordswift list-indexes                         List all indexes
+
+Author: Supreet Sethi <supreet.sethi@gmail.com>
+Repository: https://github.com/djinn/WordSwift
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Add project root to path so imports work
+_script_dir = Path(__file__).resolve().parent
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
+
+from src.engine import WordSwiftEngine
+
+
+def cmd_train(args):
+    """Train word embeddings from a corpus."""
+    engine = WordSwiftEngine(
+        dim=args.dim,
+        ws=args.ws,
+        epoch=args.epoch,
+        min_count=args.min_count,
+        lr=args.lr,
+    )
+    engine.train(args.corpus)
+    engine.save(args.output)
+    print(f"\nTraining complete. Model saved to {args.output}")
+
+
+def cmd_nearest(args):
+    """Find nearest neighbors."""
+    engine = WordSwiftEngine()
+    engine.load(args.model)
+    results = engine.get_nearest(args.word, n=args.n)
+    print(f"\nNearest neighbors for '{args.word}':")
+    print(f"{'Word':<20} {'Similarity':<10}")
+    print("-" * 30)
+    for word, sim in results:
+        print(f"{word:<20} {sim:.6f}")
+
+
+def cmd_analogies(args):
+    """Solve word analogies."""
+    engine = WordSwiftEngine()
+    engine.load(args.model)
+    print(f"Analogy: {args.a} : {args.b} :: {args.c} : ?")
+    results = engine.get_analogies(args.a, args.b, args.c, n=args.n)
+    print(f"{'Word':<20} {'Score':<10}")
+    print("-" * 30)
+    for word, sim in results:
+        print(f"{word:<20} {sim:.6f}")
+
+
+def cmd_vector(args):
+    """Get word vector."""
+    engine = WordSwiftEngine()
+    engine.load(args.model)
+    vec = engine.get_word_vector(args.word)
+    if args.json:
+        print(json.dumps({"word": args.word, "vector": vec.tolist(), "dim": len(vec)}))
+    else:
+        print(f"Vector for '{args.word}' (dim={len(vec)}):")
+        print("  " + " ".join(f"{v:.6f}" for v in vec[:10]) + " ...")
+
+
+def cmd_serve(args):
+    """Start the API server."""
+    from src.api import run_server
+    run_server(host=args.host, port=args.port, data_dir=args.data_dir)
+
+
+def cmd_create_index(args):
+    """Create a new index."""
+    from src.api import IndexRegistry
+    registry = IndexRegistry(args.data_dir)
+    engine = registry.create(args.name, dim=args.dim)
+    print(f"Index '{args.name}' created (dim={args.dim})")
+
+
+def cmd_list_indexes(args):
+    """List all indexes."""
+    from src.api import IndexRegistry
+    registry = IndexRegistry(args.data_dir)
+    indexes = registry.list_indexes()
+    if not indexes:
+        print("No indexes found.")
+        return
+    print(f"{'Name':<20} {'Vocab':<8} {'Dim':<6} {'Index Size':<12}")
+    print("-" * 46)
+    for idx in indexes:
+        print(f"{idx['name']:<20} {idx.get('vocab_size', 0):<8} "
+              f"{idx.get('dimension', 0):<6} {idx.get('index_size', 0):<12}")
+
+
+def cmd_import(args):
+    """Import a word2vec-format text file."""
+    engine = WordSwiftEngine()
+    vecs = {}
+    with open(args.input, "r", encoding="utf-8", errors="replace") as f:
+        header = f.readline()
+        parts = header.strip().split()
+        if len(parts) == 2:
+            total = int(parts[0])
+            dim = int(parts[1])
+            engine.dim = dim
+            for line in f:
+                tokens = line.strip().split()
+                if len(tokens) < 2:
+                    continue
+                word = tokens[0]
+                vec = [float(x) for x in tokens[1:]]
+                if len(vec) == dim:
+                    vecs[word] = vec
+
+    import numpy as np
+    engine.dict.id2word = list(vecs.keys())
+    engine.dict.words = {w: 1 for w in vecs}
+    engine.vectors = np.array([vecs[w] for w in engine.dict.id2word], dtype=np.float32)
+    engine.dim = engine.vectors.shape[1]
+    engine.save(args.output)
+    print(f"Imported {engine.vocab_size} words (dim={engine.dim}) to {args.output}")
+
+
+def cmd_index(args):
+    """Index a model into LevelDB."""
+    engine = WordSwiftEngine()
+    engine.load(args.model)
+    engine.open_index(args.db_path or (Path(args.model).stem + "_index"))
+    engine.index_all()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="WordSwift — Word embedding search engine (MeiliSearch-compatible)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  wordswift train corpus.txt -o vectors.bin
+  wordswift nearest vectors.bin king -n 10
+  wordswift analogies vectors.bin paris france berlin -n 5
+  wordswift vector vectors.bin hello --json
+  wordswift serve --data-dir ./data
+  wordswift create-index myindex --dim 100
+        """,
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Command")
+
+    # train
+    tp = subparsers.add_parser("train", help="Train word embeddings")
+    tp.add_argument("corpus", help="Path to training corpus (text file)")
+    tp.add_argument("-o", "--output", required=True, help="Output model path")
+    tp.add_argument("--dim", type=int, default=100, help="Embedding dimension")
+    tp.add_argument("--ws", type=int, default=5, help="Window size")
+    tp.add_argument("--epoch", type=int, default=5, help="Number of epochs")
+    tp.add_argument("--min-count", type=int, default=5, help="Minimum word frequency")
+    tp.add_argument("--lr", type=float, default=0.05, help="Learning rate")
+
+    # nearest
+    np = subparsers.add_parser("nearest", help="Find nearest neighbors")
+    np.add_argument("model", help="Model path")
+    np.add_argument("word", help="Query word")
+    np.add_argument("-n", type=int, default=10, help="Number of results")
+
+    # analogies
+    ap = subparsers.add_parser("analogies", help="Solve word analogies")
+    ap.add_argument("model", help="Model path")
+    ap.add_argument("a", help="First word")
+    ap.add_argument("b", help="Second word")
+    ap.add_argument("c", help="Third word")
+    ap.add_argument("-n", type=int, default=10, help="Number of results")
+
+    # vector
+    vp = subparsers.add_parser("vector", help="Get word vector")
+    vp.add_argument("model", help="Model path")
+    vp.add_argument("word", help="Word to look up")
+    vp.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # serve
+    sp = subparsers.add_parser("serve", help="Start API server")
+    sp.add_argument("--host", default="0.0.0.0", help="Bind address")
+    sp.add_argument("--port", type=int, default=7700, help="Port (default: 7700)")
+    sp.add_argument("--data-dir", default="data", help="Data directory")
+
+    # create-index
+    cp = subparsers.add_parser("create-index", help="Create a new index")
+    cp.add_argument("name", help="Index name")
+    cp.add_argument("--dim", type=int, default=100, help="Embedding dimension")
+    cp.add_argument("--data-dir", default="data", help="Data directory")
+
+    # list-indexes
+    lp = subparsers.add_parser("list-indexes", help="List all indexes")
+    lp.add_argument("--data-dir", default="data", help="Data directory")
+
+    # import
+    im = subparsers.add_parser("import", help="Import word2vec text format")
+    im.add_argument("input", help="Input word2vec text file")
+    im.add_argument("-o", "--output", required=True, help="Output model path")
+
+    # index
+    ix = subparsers.add_parser("index", help="Index a model into LevelDB")
+    ix.add_argument("model", help="Model path")
+    ix.add_argument("--db-path", help="LevelDB path (default: <model stem>_index)")
+
+    args = parser.parse_args()
+
+    if args.command == "train":
+        cmd_train(args)
+    elif args.command == "nearest":
+        cmd_nearest(args)
+    elif args.command == "analogies":
+        cmd_analogies(args)
+    elif args.command == "vector":
+        cmd_vector(args)
+    elif args.command == "serve":
+        cmd_serve(args)
+    elif args.command == "create-index":
+        cmd_create_index(args)
+    elif args.command == "list-indexes":
+        cmd_list_indexes(args)
+    elif args.command == "import":
+        cmd_import(args)
+    elif args.command == "index":
+        cmd_index(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
