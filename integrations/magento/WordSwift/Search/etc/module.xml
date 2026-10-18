@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!--
+  Module declaration. The <sequence> entries make Magento load the catalog and
+  search modules first, so our plugin target classes exist by the time
+  WordSwift_Search is initialised.
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:Module/etc/module.xsd">
+    <module name="WordSwift_Search" setup_version="1.0.0">
+        <sequence>
+            <module name="Magento_Catalog"/>
+            <module name="Magento_Search"/>
+            <module name="Magento_Store"/>
+        </sequence>
+    </module>
+</config>

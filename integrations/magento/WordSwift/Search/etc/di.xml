@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/di.xsd">
+
+    <preference for="WordSwift\Search\Api\ClientInterface"
+                type="WordSwift\Search\Model\Client"/>
+
+    <!--
+      Replace the catalog search result collection with WordSwift-ranked ids.
+      ItemCollectionProvider is the version-stable seam: Magento hands it the
+      user query and expects a product collection back, so we can return one
+      ordered by BM25/fuzzy relevance instead of Elasticsearch's ordering.
+    -->
+    <type name="Magento\CatalogSearch\Model\Search\ItemCollectionProvider">
+        <plugin name="wordswift_search_collection"
+                type="WordSwift\Search\Plugin\ItemCollectionProviderPlugin"
+                sortOrder="10"/>
+    </type>
+
+    <!-- bin/magento wordswift:resync and wordswift:search -->
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="wordswift_resync" xsi:type="object">WordSwift\Search\Console\Command\ResyncCommand</item>
+                <item name="wordswift_search" xsi:type="object">WordSwift\Search\Console\Command\TestSearchCommand</item>
+            </argument>
+        </arguments>
+    </type>
+</config>

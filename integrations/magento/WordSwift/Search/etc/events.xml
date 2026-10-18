@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!--
+  Incremental indexing: re-index one product on save/delete instead of running
+  a full resync. Pair this with a scheduled `bin/magento wordswift:resync` as a
+  safety net — see docs/ECOMMERCE.md#keeping-the-index-fresh.
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:Event/etc/events.xsd">
+
+    <!-- Fires after a product is saved in the admin or via API. -->
+    <event name="catalog_product_save_after">
+        <observer name="wordswift_product_save"
+                  instance="WordSwift\Search\Observer\ProductSaveObserver"/>
+    </event>
+
+    <!-- Fires after a product is deleted; the document lingers in WordSwift
+         until the next full resync, since the API has no per-document delete. -->
+    <event name="catalog_product_delete_after_done">
+        <observer name="wordswift_product_delete"
+                  instance="WordSwift\Search\Observer\ProductSaveObserver"/>
+    </event>
+</config>

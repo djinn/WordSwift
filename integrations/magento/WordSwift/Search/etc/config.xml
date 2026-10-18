@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!--
+  Default configuration values. These apply until an admin overrides them under
+  Stores → Configuration → Catalog → WordSwift Search.
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Store:etc/config.xsd">
+    <default>
+        <wordswift>
+            <general>
+                <enabled>0</enabled>
+                <url>http://localhost:7700</url>
+                <index>magento_products</index>
+                <timeout>10</timeout>
+                <limit>20</limit>
+                <hybrid>1</hybrid>
+                <typo_tolerance>1</typo_tolerance>
+            </general>
+        </wordswift>
+    </default>
+</config>
