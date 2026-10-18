@@ -132,6 +132,63 @@ wordswift vectorize vectors.bin "the king and queen"
 
 ---
 
+## Deployment
+
+Run WordSwift as a container with Docker or Podman:
+
+```bash
+docker compose up -d          # or: podman-compose up -d
+curl http://localhost:7700/health
+```
+
+Indexes persist in the `wordswift_data` volume. For build options, rootless
+Podman notes, Kubernetes manifests, and hardening guidance (WordSwift has no
+built-in auth — never expose port 7700 publicly), see
+**[docs/DOCKER.md](docs/DOCKER.md)**.
+
+---
+
+## Integrations
+
+Adapters that connect WordSwift to ecommerce platforms and LLM agent
+frameworks live in [`integrations/`](integrations/README.md):
+
+| Integration | What it does |
+|-------------|--------------|
+| **[Shopify](integrations/shopify/)** | Product sync, signed webhook receiver, storefront autocomplete |
+| **[WooCommerce](integrations/woocommerce/)** | WordPress plugin that replaces native search, with an admin resync UI |
+| **[BigCommerce](integrations/bigcommerce/)** | Catalog v3 sync and a Stencil theme widget |
+| **[Magento](integrations/magento/)** | Full Magento 2 module with `bin/magento wordswift:resync` |
+| **[RAG](integrations/rag/)** | LangChain/LlamaIndex retrievers and agent tools with citation checks |
+
+All Python integrations share a dependency-free HTTP client
+([`integrations/common/`](integrations/common/)).
+
+Platform integration patterns, the shared document schema, index-freshness
+strategy, and scaling guidance are covered in **[docs/ECOMMERCE.md](docs/ECOMMERCE.md)**.
+
+### Using WordSwift for RAG
+
+WordSwift works as a retrieval backend for LLM agents — BM25 catches exact
+keywords, fuzzy matching absorbs typos, and embeddings handle conceptual
+queries:
+
+```python
+from wordswift_retriever import WordSwiftRetriever, grounded_answer
+
+retriever = WordSwiftRetriever(index_name="knowledge_base", k=5)
+result = grounded_answer(retriever, "What is the return window?", call_llm=my_llm)
+
+print(result["answer"])
+print(result["sources"])        # citations resolved to real doc ids
+print(result["bad_citations"])  # citations the model invented
+```
+
+Retrieval-cascade internals, chunking, multi-agent designs and evaluation are
+covered in **[docs/RAG.md](docs/RAG.md)**.
+
+---
+
 ## Project Structure
 
 ```
@@ -141,6 +198,8 @@ WordSwift/
 ├── README.md              # This file
 ├── LICENSE                # MIT License
 ├── CONTRIBUTING.md        # Contributing guide
+├── Dockerfile             # Container image (Docker & Podman)
+├── docker-compose.yml     # One-command deployment
 ├── include/
 │   ├── wordswift.h        # C header for native build
 │   └── leveldb/           # LevelDB C API headers
@@ -151,6 +210,17 @@ WordSwift/
 │   ├── dictionary.py      # Vocabulary with subword hashing
 │   ├── indexer.py         # Full-text BM25 + fuzzy + prefix search
 │   └── storage.py         # LevelDB storage (with Python fallback)
+├── docs/
+│   ├── DOCKER.md          # Docker & Podman deployment guide
+│   ├── ECOMMERCE.md       # Shopify/WooCommerce/BigCommerce/Magento
+│   └── RAG.md             # RAG + agent integration guide
+├── integrations/          # Platform adapters (see integrations/README.md)
+│   ├── common/            # Shared Python HTTP client
+│   ├── shopify/           # Sync, webhooks, theme widget
+│   ├── woocommerce/       # WordPress plugin
+│   ├── bigcommerce/       # Catalog sync + Stencil widget
+│   ├── magento/           # Magento 2 module
+│   └── rag/               # LangChain/LlamaIndex retrievers + agent tools
 ├── tests/
 │   ├── test_api.py        # Integration tests
 │   └── bench_movielens.py # MovieLens benchmark
