@@ -82,7 +82,13 @@ class IndexRegistry:
                 db_path = entry.get("db_path")
                 ft_path = entry.get("ft_path")
 
-                engine = WordSwiftEngine()
+                # Restore the saved dimension so untrained indexes keep the dim
+                # they were created with. If a model file exists, engine.load()
+                # below overwrites this with the dimension actually baked into
+                # the model, which is authoritative.
+                saved_dim = entry.get("dim")
+                engine = WordSwiftEngine(dim=int(saved_dim)) if saved_dim else WordSwiftEngine()
+
                 if model_path and Path(model_path).exists():
                     try:
                         engine.load(model_path)
@@ -92,17 +98,22 @@ class IndexRegistry:
                     engine.open_index(db_path)
 
                 if ft_path:
-                    try:
-                        self.ft_indexes[name] = InvertedIndex(ft_path)
-                    except Exception as e:
-                        print(f"  Warning: failed to open FT index '{name}': {e}", file=sys.stderr)
+                    # Do not swallow this. An index whose full-text store failed
+                    # to open reports zero documents and silently serves an
+                    # empty result set — indistinguishable from data loss.
+                    self.ft_indexes[name] = InvertedIndex(ft_path)
 
                 self.indexes[name] = engine
 
     def _save_manifest(self) -> None:
         manifest = []
-        for name in self.indexes:
+        for name, engine in self.indexes.items():
             entry = {"name": name}
+            # Persist the embedding dimension. Without this, an index that was
+            # created with a non-default dim but never trained has no .ws file to
+            # restore it from, so it silently reports the constructor default
+            # after a restart.
+            entry["dim"] = int(getattr(engine, "dim", 100))
             model_path = self.data_dir / f"{name}.ws"
             if model_path.exists():
                 entry["model_path"] = str(model_path)
@@ -190,11 +201,49 @@ class IndexRegistry:
             result.append(info)
         return result
 
+    def close(self) -> None:
+        """Release every LevelDB lock held by this registry.
+
+        LevelDB permits only one writer per directory. Without this, building a
+        second IndexRegistry in the same process fails to acquire the locks and
+        silently falls back to empty in-memory storage — which serves a blank
+        index and looks like data loss.
+        """
+        for ft in self.ft_indexes.values():
+            try:
+                ft.close()
+            except Exception:  # pragma: no cover - best effort teardown
+                pass
+        for engine in self.indexes.values():
+            try:
+                engine.close_index()
+            except Exception:  # pragma: no cover
+                pass
+
+        self.ft_indexes.clear()
+        self.indexes.clear()
+
 
 # The data directory is resolved from the environment so that it survives
 # uvicorn's re-import of this module when started via the "src.api:app"
 # import string (used by --reload and multi-worker mode).
 DEFAULT_DATA_DIR = os.environ.get("WORDSWIFT_DATA_DIR", "data")
+
+
+# Guard against `python -m src.api`, which executes this module body twice:
+# once as `src.api` (pulled in by src/__init__.py) and again as `__main__`
+# (via runpy). Each execution builds an IndexRegistry, which opens the LevelDB
+# directories and takes their exclusive locks. The second build cannot acquire
+# them and silently falls back to empty in-memory storage, serving a blank
+# index that looks like data loss.
+#
+# When we detect we are that second execution, delegate to the canonical
+# `src.api` module (whose registry already holds the locks and will be reused by
+# run_server) instead of constructing a competing one.
+if __name__ == "__main__" and sys.modules.get("src.api") is not None:
+    sys.modules["src.api"]._main()
+    raise SystemExit(0)
+
 
 registry = IndexRegistry(DEFAULT_DATA_DIR)
 
@@ -571,6 +620,14 @@ def run_server(host: str = "0.0.0.0", port: int = 7700, data_dir: str | None = N
     variable so that the worker process (which re-imports ``src.api``) resolves
     the same directory. Passing the registry alone is not enough because
     ``uvicorn.run`` with an import string builds a fresh module namespace.
+
+    Note on locks: this module builds a registry at import time, which opens
+    the LevelDB directories and takes their exclusive locks. LevelDB allows
+    only one writer per directory, so we must NOT simply construct a second
+    registry over the same path — the second open fails and falls back to empty
+    in-memory storage, serving a blank index that looks like data loss. We
+    therefore reuse the existing registry when the resolved path matches, and
+    release its locks before switching to a different path.
     """
     global registry
 
@@ -578,9 +635,17 @@ def run_server(host: str = "0.0.0.0", port: int = 7700, data_dir: str | None = N
     resolved = str(Path(resolved).resolve())
     os.environ["WORDSWIFT_DATA_DIR"] = resolved
 
-    # Rebind the module global that every endpoint closes over.
-    registry = IndexRegistry(resolved)
-    app.state.registry = registry
+    current_dir = str(Path(registry.data_dir).resolve())
+
+    if current_dir == resolved:
+        # Import-time registry already points here and holds the locks — reuse
+        # it so indexes and their documents survive.
+        app.state.registry = registry
+    else:
+        # Different data dir: release the existing locks before reopening.
+        registry.close()
+        registry = IndexRegistry(resolved)
+        app.state.registry = registry
 
     # Pass the app OBJECT rather than the "src.api:app" import string.
     # uvicorn re-importing that string can resolve to a *different* module
@@ -590,11 +655,26 @@ def run_server(host: str = "0.0.0.0", port: int = 7700, data_dir: str | None = N
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
-if __name__ == "__main__":
+def _main(argv: list[str] | None = None) -> None:
+    """Parse CLI args and start the server.
+
+    Shared by ``python -m src`` (the canonical entrypoint) and ``python -m
+    src.api``. The latter triggers the duplicate-module guard near the top of
+    this file, which routes here so only one IndexRegistry is ever built.
+    """
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=7700)
-    parser.add_argument("--data-dir", default="data")
-    args = parser.parse_args()
+
+    parser = argparse.ArgumentParser(
+        prog="wordswift-serve",
+        description="WordSwift — MeiliSearch-compatible word search server",
+    )
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address")
+    parser.add_argument("--port", type=int, default=7700, help="Listen port")
+    parser.add_argument("--data-dir", default=None,
+                        help="Index directory (default: $WORDSWIFT_DATA_DIR or ./data)")
+    args = parser.parse_args(argv)
     run_server(args.host, args.port, args.data_dir)
+
+
+if __name__ == "__main__":
+    _main()

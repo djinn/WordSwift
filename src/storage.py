@@ -42,8 +42,26 @@ class LevelDBIndex:
             try:
                 self._db = _ldb.DB(str(self.db_path), create_if_missing=create)
             except Exception as exc:
-                warnings.warn(f"LevelDB open failed: {exc}; using fallback")
-                self._db = None
+                # LevelDB IS installed, so failing to open is a real problem
+                # (lock held by another process, permissions, corrupt DB).
+                # Silently swapping in an empty dict would serve a blank index
+                # and look like data loss, so surface it instead.
+                raise RuntimeError(
+                    f"LevelDB installed but failed to open '{self.db_path}': {exc}. "
+                    "If the LOCK is already held, another process (or a second "
+                    "IndexRegistry in this process) owns this directory. If you "
+                    "intend to run without LevelDB, uninstall plyvel to use the "
+                    "in-memory fallback."
+                ) from exc
+        else:
+            # No LevelDB bindings at all — the documented pure-Python fallback.
+            # Data will not persist across restarts.
+            warnings.warn(
+                f"LevelDB unavailable; '{self.db_path}' uses in-memory storage "
+                "and will NOT persist across restarts",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     def put(self, key: bytes, value: bytes) -> None:
         if self._db is not None:
