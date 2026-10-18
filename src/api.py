@@ -191,7 +191,12 @@ class IndexRegistry:
         return result
 
 
-registry = IndexRegistry()
+# The data directory is resolved from the environment so that it survives
+# uvicorn's re-import of this module when started via the "src.api:app"
+# import string (used by --reload and multi-worker mode).
+DEFAULT_DATA_DIR = os.environ.get("WORDSWIFT_DATA_DIR", "data")
+
+registry = IndexRegistry(DEFAULT_DATA_DIR)
 
 
 # ======================================================================
@@ -559,10 +564,30 @@ async def vectorize(
 # Main
 # ======================================================================
 
-def run_server(host: str = "0.0.0.0", port: int = 7700, data_dir: str = "data"):
+def run_server(host: str = "0.0.0.0", port: int = 7700, data_dir: str | None = None):
+    """Start the API server.
+
+    ``data_dir`` is exported through the ``WORDSWIFT_DATA_DIR`` environment
+    variable so that the worker process (which re-imports ``src.api``) resolves
+    the same directory. Passing the registry alone is not enough because
+    ``uvicorn.run`` with an import string builds a fresh module namespace.
+    """
     global registry
-    registry = IndexRegistry(data_dir)
-    uvicorn.run("src.api:app", host=host, port=port, log_level="info")
+
+    resolved = data_dir or os.environ.get("WORDSWIFT_DATA_DIR") or "data"
+    resolved = str(Path(resolved).resolve())
+    os.environ["WORDSWIFT_DATA_DIR"] = resolved
+
+    # Rebind the module global that every endpoint closes over.
+    registry = IndexRegistry(resolved)
+    app.state.registry = registry
+
+    # Pass the app OBJECT rather than the "src.api:app" import string.
+    # uvicorn re-importing that string can resolve to a *different* module
+    # namespace than the one we just patched (notably under `python -m src.api`,
+    # where this file runs as __main__ while `src.api` is already in
+    # sys.modules). That silently falls back to the default ./data directory.
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
