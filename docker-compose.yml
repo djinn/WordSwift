@@ -1,0 +1,43 @@
+# WordSwift — Docker/Podman Compose
+#
+#   docker compose up -d          # Docker
+#   podman-compose up -d          # Podman (podman-compose package)
+#   podman compose up -d          # Podman 4.7+ with docker-compose shim
+#
+version: "3.8"
+
+services:
+  wordswift:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wordswift:0.2.0
+    container_name: wordswift
+    restart: unless-stopped
+    ports:
+      - "${WORDSWIFT_PORT:-7700}:7700"
+    environment:
+      # Only WORDSWIFT_DATA_DIR is read by the application. Host and port are
+      # passed as CLI arguments via the image CMD (see Dockerfile), not through
+      # the environment.
+      - WORDSWIFT_DATA_DIR=/app/data
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - wordswift_data:/app/data
+      # Mount a training corpus read-only, then train via the API:
+      - ./data:/app/corpus:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # Resource limits (adjust to your catalog size).
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+volumes:
+  wordswift_data:
+    driver: local
