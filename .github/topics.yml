@@ -1,0 +1,37 @@
+topics:
+  - name: word-search
+    description: Semantic word search engine
+  - name: semantic-search
+    description: Cosine similarity based word search
+  - name: full-text-search
+    description: BM25 keyword search with inverted index
+  - name: fuzzy-search
+    description: Damerau-Levenshtein typo-tolerant search
+  - name: typo-tolerant
+    description: Misspelling correction via edit distance
+  - name: bm25
+    description: BM25 ranking algorithm
+  - name: fasttext
+    description: fastText-derived subword embeddings
+  - name: word-embeddings
+    description: Word vector training and inference
+  - name: nlp
+    description: Natural language processing
+  - name: search-engine
+    description: REST API search engine
+  - name: information-retrieval
+    description: Text retrieval and ranking
+  - name: meilisearch
+    description: MeiliSearch-compatible API
+  - name: leveldb
+    description: LevelDB key-value storage
+  - name: levenshtein
+    description: Levenshtein edit distance
+  - name: word-analogies
+    description: Word analogy solver
+  - name: cosine-similarity
+    description: Vector similarity search
+  - name: vector-search
+    description: Embedding vector search
+  - name: fastapi
+    description: FastAPI web server
