@@ -1,0 +1,42 @@
+#!/bin/sh
+# WordSwift postrm — clean up state on purge.
+#
+# The debhelper substitution token appears near the end of this file on its own
+# line. Do not mention that token anywhere else, including in comments: dh
+# replaces every occurrence, so writing it inside a comment splits the comment
+# and leaves stray text that the shell tries to execute as a command.
+set -e
+
+case "$1" in
+    purge)
+        # Remove the state directory the package created. It is provisioned by
+        # usr/lib/tmpfiles.d/wordswift.conf and by StateDirectory= in the unit
+        # rather than being shipped in the .deb, so nothing else removes it and
+        # it would otherwise survive purge.
+        #
+        # This holds the LevelDB indexes, so purge destroys search data. That is
+        # what purge means; plain `remove` deliberately preserves it.
+        if [ -d /var/lib/wordswift ]; then
+            rm -rf /var/lib/wordswift
+        fi
+
+        # The /etc/wordswift directory is emptied by dpkg (its conffile is
+        # registered), but remove the directory itself if it is left behind.
+        if [ -d /etc/wordswift ]; then
+            rmdir --ignore-fail-on-non-empty /etc/wordswift 2>/dev/null || true
+        fi
+
+        # NOTE: the `wordswift` system user and group created by
+        # usr/lib/sysusers.d/wordswift.conf are intentionally NOT deleted.
+        # Deleting a system account risks its UID being reused by an unrelated
+        # package, which would silently reassign ownership of any files still
+        # carrying the old UID. Leaving the account is the safer, conventional
+        # choice and costs nothing. It can be removed manually if desired:
+        #   userdel wordswift && groupdel wordswift
+        ;;
+esac
+
+# Debhelper appends its generated snippets (systemd unit state cleanup) here.
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,68 @@
+[Unit]
+Description=WordSwift semantic word search engine (MeiliSearch-compatible API)
+Documentation=https://github.com/djinn/WordSwift
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wordswift
+Group=wordswift
+
+# systemd creates /var/lib/wordswift, chowns it to User=/Group= and makes it
+# writable before ExecStart runs, then removes it on `systemctl clean`. This is
+# what guarantees correct ownership — shipping the directory in the .deb would
+# leave it root-owned and unwritable by the service user.
+StateDirectory=wordswift
+StateDirectoryMode=0750
+
+# Index storage location, matching StateDirectory above.
+Environment=WORDSWIFT_DATA_DIR=/var/lib/wordswift
+
+# Defaults for the substitutions in ExecStart below. systemd expands ${VAR}
+# literally and passes an empty argument when a variable is unset, so these
+# must be defined here rather than only in the optional EnvironmentFile.
+Environment=WORDSWIFT_HOST=127.0.0.1
+Environment=WORDSWIFT_PORT=7700
+
+# Site-specific overrides (bind address, port, etc.). The leading "-" makes the
+# missing file non-fatal so the unit still starts on a fresh install.
+EnvironmentFile=-/etc/wordswift/wordswift.env
+
+# The CLI resolves the sibling `src` package via its own sys.path bootstrap, so
+# running the console script needs no PYTHONPATH.
+ExecStart=/usr/bin/wordswift serve --host ${WORDSWIFT_HOST} --port ${WORDSWIFT_PORT} --data-dir /var/lib/wordswift
+
+Restart=on-failure
+RestartSec=5s
+
+# Indexes are LevelDB directories holding an exclusive lock. A SIGKILL leaves a
+# stale LOCK behind and the next start cannot open the database, so give the
+# server time to exit cleanly and never SIGKILL it.
+KillMode=process
+TimeoutStopSec=30s
+
+# ---- Hardening ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+ProtectHostname=true
+ProtectClock=true
+RestrictRealtime=true
+
+# The engine binds a listening socket itself, so no socket activation.
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

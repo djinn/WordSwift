@@ -1,0 +1,14 @@
+wordswift (0.2.0) unstable; urgency=medium
+
+  * Initial Debian packaging.
+  * Install the engine into the private directory /usr/lib/wordswift and
+    expose /usr/bin/wordswift, avoiding a top-level Python module named "src"
+    in site-packages.
+  * Ship a systemd service bound to 127.0.0.1:7700 by default, with a
+    dedicated system user and hardened sandboxing directives.
+  * Provision /var/lib/wordswift via tmpfiles.d and the wordswift system
+    account via sysusers.d.
+  * Depend on python3-plyvel: without LevelDB bindings the storage layer falls
+    back to in-memory dictionaries and indexes do not survive a restart.
+
+ -- Supreet Sethi <supreet.sethi@gmail.com>  Sun, 18 Oct 2026 23:16:52 +0000

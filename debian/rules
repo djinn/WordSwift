@@ -1,0 +1,78 @@
+#!/usr/bin/make -f
+# WordSwift — Debian packaging rules.
+#
+# Layout rationale: the console script imports the package as `src`, and the
+# upstream tree has no installable distribution name for it. Installing `src/`
+# into site-packages would create a top-level module literally named "src" that
+# collides with anything else on the system using that name. Instead everything
+# goes into a private directory, /usr/lib/wordswift, and /usr/bin/wordswift is a
+# symlink to the script inside it.
+#
+# The script bootstraps sys.path from Path(__file__).resolve().parent, so it
+# finds its sibling `src` package regardless of the caller's working directory.
+
+export DH_VERBOSE = 1
+
+LIBDIR = usr/lib/wordswift
+
+%:
+	# --buildsystem=none: this is a pure-Python package whose files are staged
+	# by hand in override_dh_auto_install below. Using the default buildsystem
+	# would select distutils/pybuild, and the distutils path was removed in
+	# debhelper compat 12, which makes even `dh clean` fail.
+	#
+	# --with installsysusers: dh_installsysusers is an addon, not part of the default
+	# sequence, so debian/wordswift.sysusers would otherwise be ignored and no
+	# system user would be created.
+	dh $@ --buildsystem=none --with installsysusers
+
+# The upstream integration files live in packaging/systemd/ so they can also be
+# used by non-Debian distributions and manual installs. The dh helpers only look
+# for debian/<package>.{service,sysusers,tmpfiles}, so stage copies just before
+# they run and remove them in dh_clean below to keep the source tree pristine for
+# dpkg-source.
+execute_before_dh_installsysusers:
+	cp -f packaging/systemd/wordswift.sysusers.conf debian/wordswift.sysusers
+
+execute_before_dh_installtmpfiles:
+	cp -f packaging/systemd/wordswift.tmpfiles.conf debian/wordswift.tmpfiles
+
+execute_before_dh_installsystemd:
+	cp -f packaging/systemd/wordswift.service debian/wordswift.service
+
+override_dh_clean:
+	rm -f debian/wordswift.service debian/wordswift.sysusers debian/wordswift.tmpfiles
+	dh_clean
+
+# Nothing to configure or compile — pure Python. Skip the auto_* steps so a
+# missing Makefile/setup.py invocation does not fail the build.
+override_dh_auto_configure:
+override_dh_auto_build:
+override_dh_auto_test:
+
+override_dh_auto_install:
+	# Install the private library tree.
+	install -d $(CURDIR)/debian/wordswift/$(LIBDIR)
+	cp -a src $(CURDIR)/debian/wordswift/$(LIBDIR)/src
+	# Drop bytecode caches so the package ships only sources.
+	find $(CURDIR)/debian/wordswift/$(LIBDIR)/src -name '__pycache__' -type d -prune -exec rm -rf {} +
+	find $(CURDIR)/debian/wordswift/$(LIBDIR)/src -name '*.pyc' -delete
+
+	# Console script next to the package it imports.
+	install -m 0755 wordswift $(CURDIR)/debian/wordswift/$(LIBDIR)/wordswift
+
+	# Public entry point.
+	install -d $(CURDIR)/debian/wordswift/usr/bin
+	ln -s ../lib/wordswift/wordswift $(CURDIR)/debian/wordswift/usr/bin/wordswift
+
+	# Environment file for the systemd unit (optional drop-in overrides).
+	install -d $(CURDIR)/debian/wordswift/etc/wordswift
+	install -m 0644 packaging/systemd/wordswift.env \
+		$(CURDIR)/debian/wordswift/etc/wordswift/wordswift.env
+
+	# NOTE: /var/lib/wordswift is deliberately NOT shipped in the package.
+	# dpkg would create it root-owned, leaving the wordswift service user
+	# unable to write indexes. It is provisioned instead by
+	#   * debian/wordswift.sysusers  (creates the wordswift account), and
+	#   * debian/wordswift.tmpfiles  (creates the dir owned by that account),
+	# which run from postinst, and by StateDirectory=wordswift in the unit.

@@ -1,0 +1,118 @@
+.TH WORDSWIFT "1" "October 2026" "WordSwift 0.2.0" "User Commands"
+.SH NAME
+wordswift \- semantic word search engine with a MeiliSearch-compatible API
+.SH SYNOPSIS
+.B wordswift
+.I COMMAND
+.RI [ options ]
+.SH DESCRIPTION
+WordSwift is a word embedding engine derived from fastText that also provides
+full-text BM25 search, typo-tolerant fuzzy search, prefix completion and
+semantic similarity through a single MeiliSearch-compatible REST API, backed by
+LevelDB for persistence.
+.PP
+The command line tool trains and queries embedding models and runs the API
+server. When installed from the Debian package the server is managed by systemd;
+see
+.BR wordswift.service (5).
+.SH COMMANDS
+.TP
+.B train \fIcorpus\fR \fB\-o\fR \fImodel\fR [\fB\-\-dim\fR \fIN\fR] [\fB\-\-ws\fR \fIN\fR] [\fB\-\-epoch\fR \fIN\fR] [\fB\-\-min\-count\fR \fIN\fR] [\fB\-\-lr\fR \fIF\fR]
+Train word embeddings from a text corpus and write the model to \fImodel\fR.
+Defaults: dim 100, window size 5, 5 epochs, min-count 5, learning rate 0.05.
+.TP
+.B nearest \fImodel\fR \fIword\fR [\fB\-n\fR \fIN\fR]
+Print the \fIN\fR words nearest to \fIword\fR by cosine similarity.
+.TP
+.B analogies \fImodel\fR \fIa\fR \fIb\fR \fIc\fR [\fB\-n\fR \fIN\fR]
+Solve \fIa\fR is to \fIb\fR as \fIc\fR is to what, and print \fIN\fR candidates.
+.TP
+.B vector \fImodel\fR \fIword\fR [\fB\-\-json\fR]
+Print the embedding vector for \fIword\fR. With \fB\-\-json\fR emit a JSON object.
+.TP
+.B serve [\fB\-\-host\fR \fIaddr\fR] [\fB\-\-port\fR \fIn\fR] [\fB\-\-data\-dir\fR \fIdir\fR]
+Start the HTTP API server. Defaults to \fI0.0.0.0\fR, port \fI7700\fR and data
+directory \fIdata\fR (relative to the working directory unless overridden).
+.TP
+.B create\-index \fIname\fR [\fB\-\-dim\fR \fIN\fR] [\fB\-\-data\-dir\fR \fIdir\fR]
+Create a new index without starting the server.
+.TP
+.B list\-indexes [\fB\-\-data\-dir\fR \fIdir\fR]
+List the indexes present in the data directory.
+.TP
+.B import \fIinput\fR \fB\-o\fR \fImodel\fR
+Import a word2vec text-format vector file into a WordSwift model.
+.TP
+.B index \fImodel\fR [\fB\-\-db\-path\fR \fIdir\fR]
+Load a trained model into LevelDB for fast lookups.
+.SH ENVIRONMENT
+.TP
+.B WORDSWIFT_DATA_DIR
+Directory holding indexes and \fImanifest.json\fR. Used as the default when
+\fBserve\fR is given no \fB\-\-data\-dir\fR. The flag takes precedence and is
+exported so worker processes agree on the location.
+.SH FILES
+.TP
+.I /var/lib/wordswift
+Index storage: \fImanifest.json\fR plus a \fI<name>_index\fR and \fI<name>_ft\fR
+LevelDB directory per index. Created and owned by the \fBwordswift\fR system
+user; provisioned by systemd \fBStateDirectory=\fR and \fBtmpfiles.d\fR rather
+than by the package, so the service user can write to it.
+.TP
+.I /etc/wordswift/wordswift.env
+Optional environment overrides read by the systemd unit.
+.B WORDSWIFT_HOST
+and
+.B WORDSWIFT_PORT
+are substituted into the unit's
+.B ExecStart
+command line; only
+.B WORDSWIFT_DATA_DIR
+is read by the application itself. The file uses systemd EnvironmentFile syntax
+(no \fBexport\fR, no quoting, no command substitution).
+.TP
+.I /usr/lib/wordswift
+Private installation directory for the Python sources.
+.SH SECURITY
+The server has
+.B no built-in authentication
+and enables CORS for all origins. The packaged unit therefore binds to
+\fB127.0.0.1\fR by default. Do not expose port 7700 to untrusted networks; put a
+reverse proxy that enforces authentication in front of it, or bind to a private
+network only. See \fI/usr/share/doc/wordswift\fR and the upstream
+\fIdocs/DOCKER.md\fR for an nginx example.
+.SH SYSTEMD
+The package installs \fBwordswift.service\fR, enabled but not started until
+configured. Typical use:
+.PP
+.RS 4
+.nf
+systemctl status wordswift
+journalctl -u wordswift -f
+.fi
+.RE
+.PP
+The unit runs as the unprivileged \fBwordswift\fR user with sandboxing enabled
+(\fBProtectSystem\fR, \fBPrivateTmp\fR, \fBNoNewPrivileges\fR, \fBSystemCallFilter\fR
+and others), and stops with \fBKillMode=process\fR so the server can close its
+LevelDB handles. A \fBSIGKILL\fR would leave a stale \fBLOCK\fR file behind and
+prevent the next start from opening the database.
+.PP
+Because indexes are LevelDB directories holding an
+.B exclusive
+lock, only one server process may use a given data directory. Do not run the
+service and a foreground \fBwordswift serve\fR against the same directory.
+.SH EXIT STATUS
+Zero on success. Non-zero on error, such as an unparseable corpus, a missing
+model file, or an unbindable port.
+.SH BUGS
+Upstream issue tracker: <https://github.com/djinn/WordSwift/issues>.
+.PP
+Known limitation: the HTTP API can delete a whole index
+(\fBDELETE /indexes/{name}\fR) but has no per-document delete endpoint.
+.SH AUTHOR
+Supreet Sethi <supreet.sethi@gmail.com>.
+.SH "SEE ALSO"
+.BR wordswift.service "(5), " systemd.unit "(5), " systemd.exec "(5), " tmpfiles.d "(5), " sysusers.d (5)
+.PP
+Upstream documentation: <https://github.com/djinn/WordSwift>.

@@ -1,0 +1,41 @@
+Source: wordswift
+Section: utils
+Priority: optional
+Maintainer: Supreet Sethi <supreet.sethi@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               python3,
+               dh-python
+Standards-Version: 4.6.2
+Homepage: https://github.com/djinn/WordSwift
+Vcs-Browser: https://github.com/djinn/WordSwift
+Vcs-Git: https://github.com/djinn/WordSwift.git
+Rules-Requires-Root: binary-targets
+
+Package: wordswift
+Architecture: all
+Depends: ${misc:Depends},
+         python3 (>= 3.10),
+         python3-fastapi,
+         python3-uvicorn,
+         python3-numpy,
+         python3-plyvel
+Description: semantic word search engine with a MeiliSearch-compatible API
+ WordSwift is a word embedding engine derived from fastText that also provides
+ full-text BM25 search, typo-tolerant fuzzy search, prefix completion, and
+ semantic word similarity through a single MeiliSearch-compatible REST API.
+ .
+ Features:
+  * CBOW and skip-gram training with subword n-gram hashing
+  * Word analogies and nearest-neighbour lookup via cosine similarity
+  * LevelDB-backed persistence for vectors and full-text posting lists
+  * Typo tolerance using Damerau-Levenshtein distance with transpositions
+  * Multi-index management and a CLI for training and querying
+ .
+ This package installs the wordswift command line tool and a systemd service
+ that listens on 127.0.0.1:7700 by default. The service has no built-in
+ authentication, so do not expose it to untrusted networks without a reverse
+ proxy in front of it.
+ .
+ python3-plyvel is a hard dependency because without it the storage layer
+ silently falls back to in-memory dictionaries and indexes do not survive a
+ restart.

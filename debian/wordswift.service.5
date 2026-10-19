@@ -1,0 +1,148 @@
+.TH WORDSWIFT.SERVICE "5" "October 2026" "WordSwift 0.2.0" "File Formats"
+.SH NAME
+wordswift.service \- systemd unit for the WordSwift search engine
+.SH SYNOPSIS
+/usr/lib/systemd/system/wordswift.service
+.SH DESCRIPTION
+\fBwordswift.service\fR runs the WordSwift HTTP API, a semantic word search
+engine with full-text BM25, typo-tolerant fuzzy search and prefix completion
+behind a MeiliSearch-compatible REST interface.
+.PP
+The unit is installed by the \fBwordswift\fR package and is enabled and started
+automatically on a fresh install, and restarted on upgrade. It listens on
+\fB127.0.0.1:7700\fR by default.
+.PP
+The process runs as the unprivileged \fBwordswift\fR system user, which is
+created by \fI/usr/lib/sysusers.d/wordswift.conf\fR. Its state directory
+\fI/var/lib/wordswift\fR is created by \fI/usr/lib/tmpfiles.d/wordswift.conf\fR
+and by the unit's \fBStateDirectory=\fR directive, both of which set ownership to
+that user. The directory is not shipped inside the package, because dpkg would
+otherwise create it root-owned and the service user could not write indexes to it.
+.SH UNIT SETTINGS
+.TP
+.B Type=simple
+The process stays in the foreground.
+.TP
+.B User=wordswift, Group=wordswift
+Runs unprivileged.
+.TP
+.B StateDirectory=wordswift
+systemd creates \fI/var/lib/wordswift\fR, chowns it to the service user and makes
+it writable before \fBExecStart\fR runs, and removes it on
+\fBsystemctl clean\fR.
+.TP
+.B StateDirectoryMode=0750
+Private to the service user and group.
+.TP
+.B ExecStart
+\fI/usr/bin/wordswift serve --host ${WORDSWIFT_HOST} --port ${WORDSWIFT_PORT}
+--data-dir /var/lib/wordswift\fR
+.TP
+.B EnvironmentFile=-/etc/wordswift/wordswift.env
+Optional site overrides. The leading \fB-\fR makes a missing file non-fatal.
+.TP
+.B Restart=on-failure, RestartSec=5s
+.TP
+.B KillMode=process, TimeoutStopSec=30s
+See \fBSHUTDOWN BEHAVIOUR\fR below.
+.TP
+.B NoNewPrivileges, PrivateTmp, ProtectSystem=full, ProtectHome
+Sandboxing. Additionally \fBProtectKernelTunables\fR,
+\fBProtectKernelModules\fR, \fBProtectControlGroups\fR, \fBRestrictSUIDSGID\fR,
+\fBRestrictNamespaces\fR, \fBLockPersonality\fR, \fBProtectHostname\fR,
+\fBProtectClock\fR and \fBRestrictRealtime\fR are enabled,
+\fBCapabilityBoundingSet\fR is empty, \fBSystemCallFilter\fR allows
+\fB@system-service\fR while denying \fB@privileged\fR and \fB@resources\fR, and
+\fBSystemCallArchitectures=native\fR.
+.TP
+.B UMask=0027
+New index files are 0640 and directories 0750, so catalog content is not
+world-readable.
+.SH ENVIRONMENT
+Only \fBWORDSWIFT_DATA_DIR\fR is read by the WordSwift application itself.
+.PP
+\fBWORDSWIFT_HOST\fR and \fBWORDSWIFT_PORT\fR are substituted into
+\fBExecStart\fR by systemd and are \fInot\fR read by the Python code. Both are
+given defaults in the unit with \fBEnvironment=\fR, because systemd expands an
+undefined \fB${VAR}\fR to an empty string, which would pass empty arguments.
+.SH CONFIGURATION FILE
+\fI/etc/wordswift/wordswift.env\fR is a registered conffile, so local edits
+survive package upgrades. It uses systemd \fBEnvironmentFile\fR syntax, which is
+\fInot\fR shell syntax:
+.RS 4
+.nf
+WORDSWIFT_PORT=8080          # correct
+export WORDSWIFT_PORT=8080   # wrong, "export" is taken literally
+WORDSWIFT_PORT="8080"        # wrong, quotes become part of the value
+.fi
+.RE
+.PP
+Apply changes with:
+.RS 4
+.nf
+systemctl daemon-reload && systemctl restart wordswift
+.fi
+.RE
+.PP
+Note that \fBExecStart\fR passes \fB--data-dir\fR explicitly, so editing
+\fBWORDSWIFT_DATA_DIR\fR alone does not relocate the indexes; override the unit
+with \fBsystemctl edit wordswift.service\fR instead.
+.SH SHUTDOWN BEHAVIOUR
+\fBKillMode=process\fR is deliberate. LevelDB indexes are directories holding an
+\fBexclusive\fR lock. systemd's default \fBcontrol-group\fR mode signals every
+process in the cgroup and follows up with \fBSIGKILL\fR after the timeout; a
+\fBSIGKILL\fRed server cannot close its LevelDB handles, which leaves a stale
+\fBLOCK\fR file and makes the next start fail with:
+.RS 4
+.nf
+IO error: lock /var/lib/wordswift/<index>_ft/LOCK:
+Resource temporarily unavailable
+.fi
+.RE
+.PP
+\fBKillMode=process\fR signals only the main process and lets it release the locks
+cleanly.
+.SH SINGLE-WRITER CONSTRAINT
+Only one process may use a given data directory at a time, because LevelDB takes
+an exclusive lock. Running a foreground server against the live state directory
+while the unit is active fails with the lock error above. Stop the service first:
+.RS 4
+.nf
+systemctl stop wordswift
+wordswift serve --data-dir /var/lib/wordswift
+.fi
+.RE
+.PP
+This failure is intentionally loud. Earlier versions silently fell back to an
+empty in-memory index, which served blank results and looked like data loss.
+.SH SECURITY
+WordSwift has \fBno built-in authentication\fR and enables CORS for all origins,
+so the unit binds to loopback by default. Do not set
+\fBWORDSWIFT_HOST=0.0.0.0\fR without a reverse proxy that enforces
+authentication: the write endpoints (\fBPOST /indexes\fR,
+\fBPOST /indexes/{name}/documents\fR, \fBDELETE /indexes/{name}\fR) would be open
+to anyone able to reach the host.
+.SH FILES
+.TP
+.I /usr/lib/systemd/system/wordswift.service
+The unit file.
+.TP
+.I /etc/wordswift/wordswift.env
+Optional overrides; a conffile.
+.TP
+.I /var/lib/wordswift
+Index storage: \fImanifest.json\fR plus a \fI<name>_index\fR and \fI<name>_ft\fR
+LevelDB directory per index. Mode 0750, owned by \fBwordswift\fR. Removed on
+package purge, preserved on plain removal.
+.TP
+.I /usr/lib/sysusers.d/wordswift.conf
+Creates the \fBwordswift\fR system user and group.
+.TP
+.I /usr/lib/tmpfiles.d/wordswift.conf
+Creates the state and config directories with correct ownership.
+.SH SEE ALSO
+.BR wordswift "(1), " systemd.service "(5), " systemd.exec "(5), "
+.BR tmpfiles.d "(5), " sysusers.d "(5), "
+.BR journalctl (1)
+.PP
+Upstream documentation: <https://github.com/djinn/WordSwift>.
