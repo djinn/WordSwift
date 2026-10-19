@@ -245,7 +245,56 @@ if __name__ == "__main__" and sys.modules.get("src.api") is not None:
     raise SystemExit(0)
 
 
-registry = IndexRegistry(DEFAULT_DATA_DIR)
+class _RegistryProxy:
+    """Lazy stand-in for the module-level :class:`IndexRegistry`.
+
+    Importing ``src.api`` must not create directories or acquire LevelDB locks.
+    ``IndexRegistry.__init__`` calls ``mkdir()`` on ``data_dir``, which defaults
+    to a path relative to the process cwd — so constructing it at import time
+    made merely importing this module require a writable working directory.
+
+    That broke the CLI: the installed script lives in ``/usr/lib/wordswift`` and
+    imports ``src.api``, so running ``wordswift --help`` from a read-only cwd
+    raised ``PermissionError`` before argparse could print anything. It also
+    took the exclusive LevelDB locks as an import side effect.
+
+    The proxy forwards attribute access to the real registry, constructing it on
+    first use. ``run_server`` attaches one explicitly so it controls the data
+    directory and lock lifetime.
+    """
+
+    __slots__ = ("_registry",)
+
+    def __init__(self) -> None:
+        self._registry: Optional[IndexRegistry] = None
+
+    def is_attached(self) -> bool:
+        """Whether a real registry has been constructed yet."""
+        return self._registry is not None
+
+    def attach(self, reg: IndexRegistry) -> None:
+        """Bind an already-constructed registry."""
+        self._registry = reg
+
+    def detach(self) -> None:
+        """Close the registry, releasing its LevelDB locks."""
+        if self._registry is not None:
+            self._registry.close()
+            self._registry = None
+
+    def instance(self) -> IndexRegistry:
+        """Return the registry, constructing it with the default dir if needed."""
+        if self._registry is None:
+            self._registry = IndexRegistry(DEFAULT_DATA_DIR)
+        return self._registry
+
+    def __getattr__(self, name: str):
+        # Only consulted for attributes not found on the proxy itself, so this
+        # does not interfere with __slots__ or the methods above.
+        return getattr(self.instance(), name)
+
+
+registry = _RegistryProxy()
 
 
 # ======================================================================
@@ -621,31 +670,30 @@ def run_server(host: str = "0.0.0.0", port: int = 7700, data_dir: str | None = N
     the same directory. Passing the registry alone is not enough because
     ``uvicorn.run`` with an import string builds a fresh module namespace.
 
-    Note on locks: this module builds a registry at import time, which opens
-    the LevelDB directories and takes their exclusive locks. LevelDB allows
-    only one writer per directory, so we must NOT simply construct a second
-    registry over the same path — the second open fails and falls back to empty
-    in-memory storage, serving a blank index that looks like data loss. We
-    therefore reuse the existing registry when the resolved path matches, and
-    release its locks before switching to a different path.
+    Note on locks: LevelDB allows only one writer per directory, so we must not
+    construct a second registry over a path one already owns — the second open
+    fails and silently falls back to empty in-memory storage, serving a blank
+    index that looks like data loss. We therefore reuse the existing registry
+    when the resolved path matches, and release its locks before switching to a
+    different path.
     """
-    global registry
-
     resolved = data_dir or os.environ.get("WORDSWIFT_DATA_DIR") or "data"
     resolved = str(Path(resolved).resolve())
     os.environ["WORDSWIFT_DATA_DIR"] = resolved
 
-    current_dir = str(Path(registry.data_dir).resolve())
-
-    if current_dir == resolved:
-        # Import-time registry already points here and holds the locks — reuse
-        # it so indexes and their documents survive.
-        app.state.registry = registry
+    # The registry is created lazily (see _RegistryProxy), so importing this
+    # module does not touch the filesystem. Construct it here, where we know the
+    # intended data directory, and only if one is not already bound to it.
+    if registry.is_attached():
+        current_dir = str(Path(registry.data_dir).resolve())
+        if current_dir != resolved:
+            # Different data dir: release the existing locks before reopening.
+            registry.detach()
+            registry.attach(IndexRegistry(resolved))
     else:
-        # Different data dir: release the existing locks before reopening.
-        registry.close()
-        registry = IndexRegistry(resolved)
-        app.state.registry = registry
+        registry.attach(IndexRegistry(resolved))
+
+    app.state.registry = registry.instance()
 
     # Pass the app OBJECT rather than the "src.api:app" import string.
     # uvicorn re-importing that string can resolve to a *different* module

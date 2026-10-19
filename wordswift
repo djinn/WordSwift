@@ -95,18 +95,67 @@ def cmd_create_index(args):
 
 
 def cmd_list_indexes(args):
-    """List all indexes."""
-    from src.api import IndexRegistry
-    registry = IndexRegistry(args.data_dir)
-    indexes = registry.list_indexes()
-    if not indexes:
-        print("No indexes found.")
+    """List all indexes in a data directory.
+
+    This deliberately reads manifest.json instead of constructing an
+    IndexRegistry. Opening the registry acquires LevelDB's exclusive directory
+    locks, which makes this read-only command fail with a traceback whenever the
+    API server is running against the same data dir -- the normal case for a
+    packaged install.
+    """
+    data_dir = Path(args.data_dir)
+    manifest_path = data_dir / "manifest.json"
+
+    try:
+        with open(manifest_path) as f:
+            entries = json.load(f)
+    except FileNotFoundError:
+        print(f"No indexes found in {data_dir}.")
         return
-    print(f"{'Name':<20} {'Vocab':<8} {'Dim':<6} {'Index Size':<12}")
-    print("-" * 46)
-    for idx in indexes:
-        print(f"{idx['name']:<20} {idx.get('vocab_size', 0):<8} "
-              f"{idx.get('dimension', 0):<6} {idx.get('index_size', 0):<12}")
+    except PermissionError:
+        # The state directory is mode 0750 owned by the service user, so
+        # listing it as any other user is denied. Say so plainly instead of
+        # dumping a traceback -- even Path.exists() raises here.
+        print(
+            f"Error: permission denied reading {manifest_path}.\n"
+            "The state directory is private to the service user. Re-run as that "
+            "user, e.g.:\n"
+            f"  sudo -u wordswift wordswift list-indexes --data-dir {data_dir}",
+            file=sys.stderr,
+        )
+        return 1
+    except IsADirectoryError:
+        print(f"Error: {manifest_path} is a directory, not a manifest.", file=sys.stderr)
+        return 1
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Error: cannot read {manifest_path}: {exc}", file=sys.stderr)
+        return 1
+
+    if not entries:
+        print(f"No indexes found in {data_dir}.")
+        return
+
+    header = f"{'Name':<20} {'Dim':<6} {'Model':<7} {'Vectors':<9} {'Full-text':<11}"
+    # Last column needs no right padding; strip it so the rule matches the
+    # visible width of the header rather than the padded field width.
+    header = header.rstrip()
+    print(header)
+    print("-" * len(header))
+
+    for entry in entries:
+        name = entry.get("name", "?")
+        dim = entry.get("dim", "?")
+
+        # Report whether each backing store is present rather than opening it.
+        model = "yes" if entry.get("model_path") else "-"
+        vectors = "yes" if entry.get("db_path") else "-"
+        fulltext = "yes" if entry.get("ft_path") else "-"
+
+        print(f"{name:<20} {str(dim):<6} {model:<7} {vectors:<9} {fulltext:<11}")
+
+    print(f"\n{len(entries)} index(es) in {data_dir}")
+    print("Documents are listed as present/absent because counting them would "
+          "require opening LevelDB, which needs an exclusive lock.")
 
 
 def cmd_import(args):
@@ -221,26 +270,30 @@ Examples:
     args = parser.parse_args()
 
     if args.command == "train":
-        cmd_train(args)
+        return cmd_train(args)
     elif args.command == "nearest":
-        cmd_nearest(args)
+        return cmd_nearest(args)
     elif args.command == "analogies":
-        cmd_analogies(args)
+        return cmd_analogies(args)
     elif args.command == "vector":
-        cmd_vector(args)
+        return cmd_vector(args)
     elif args.command == "serve":
-        cmd_serve(args)
+        return cmd_serve(args)
     elif args.command == "create-index":
-        cmd_create_index(args)
+        return cmd_create_index(args)
     elif args.command == "list-indexes":
-        cmd_list_indexes(args)
+        return cmd_list_indexes(args)
     elif args.command == "import":
-        cmd_import(args)
+        return cmd_import(args)
     elif args.command == "index":
-        cmd_index(args)
+        return cmd_index(args)
     else:
         parser.print_help()
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    # Propagate command exit codes. Without this, errors reported on stderr
+    # (unreadable manifest, missing model, unbindable port) still exited 0, so
+    # scripts and systemd could not detect failure. A None return means success.
+    sys.exit(main() or 0)
