@@ -134,7 +134,7 @@ wordswift vectorize vectors.bin "the king and queen"
 
 ## Deployment
 
-Run WordSwift as a container with Docker or Podman:
+### Container (Docker / Podman)
 
 ```bash
 docker compose up -d          # or: podman-compose up -d
@@ -142,9 +142,27 @@ curl http://localhost:7700/health
 ```
 
 Indexes persist in the `wordswift_data` volume. For build options, rootless
-Podman notes, Kubernetes manifests, and hardening guidance (WordSwift has no
-built-in auth — never expose port 7700 publicly), see
+Podman notes, Kubernetes manifests, and hardening guidance, see
 **[docs/DOCKER.md](docs/DOCKER.md)**.
+
+### Native package (Debian/Ubuntu)
+
+```bash
+dpkg-buildpackage -us -uc -b            # build wordswift_0.2.0_all.deb
+sudo apt install ../wordswift_0.2.0_all.deb
+systemctl status wordswift
+curl http://127.0.0.1:7700/health
+```
+
+Installs a `wordswift.service` systemd unit bound to `127.0.0.1:7700`, running as
+a dedicated unprivileged user with sandboxing enabled and indexes persisted in
+`/var/lib/wordswift`. See **[docs/SYSTEMD.md](docs/SYSTEMD.md)** for
+configuration and operations, and **[docs/PACKAGING.md](docs/PACKAGING.md)** for
+packaging internals.
+
+> ⚠️ **WordSwift has no built-in authentication** and enables CORS for all
+> origins. Both the container and the systemd unit default to loopback only. Do
+> not expose port 7700 publicly without a reverse proxy enforcing auth.
 
 ---
 
@@ -212,8 +230,13 @@ WordSwift/
 │   └── storage.py         # LevelDB storage (with Python fallback)
 ├── docs/
 │   ├── DOCKER.md          # Docker & Podman deployment guide
+│   ├── SYSTEMD.md         # Native systemd service guide
+│   ├── PACKAGING.md       # Building the Debian package
 │   ├── ECOMMERCE.md       # Shopify/WooCommerce/BigCommerce/Magento
 │   └── RAG.md             # RAG + agent integration guide
+├── packaging/
+│       └── systemd/           # Unit, env file, sysusers + tmpfiles snippets
+├── debian/                  # Debian packaging (control, rules, manpages)
 ├── integrations/          # Platform adapters (see integrations/README.md)
 │   ├── common/            # Shared Python HTTP client
 │   ├── shopify/           # Sync, webhooks, theme widget
