@@ -70,7 +70,7 @@ jobs:
       - name: Install packaging toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq debhelper dh-python lintian 2>&1 | tail -5
+          sudo apt-get install -y -qq build-essential debhelper dh-python lintian 2>&1 | tail -5
 
       - name: Build .deb
         run: |
